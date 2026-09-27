@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Objectif Coupe Animath</title>
+  <meta name="description" content="Un problème par jour, avec pistes, leçon et correction, pour préparer la Coupe Animath de printemps." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#aujourdhui">
+      <span class="logo" aria-hidden="true">∑</span>
+      <span class="brand-txt"><strong>Objectif Coupe Animath</strong><small>un problème par jour</small></span>
+    </a>
+    <div class="stats-mini" id="statsMini"></div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <a href="#aujourdhui" data-tab="aujourdhui">Aujourd'hui</a>
+    <a href="#calendrier" data-tab="calendrier">Calendrier</a>
+    <a href="#cours" data-tab="cours">Leçons</a>
+    <a href="#progres" data-tab="progres">Progrès</a>
+    <a href="#methode" data-tab="methode">Méthode</a>
+  </nav>
+
+  <main id="app"></main>
+
+  <footer class="foot">
+    Préparation à la Coupe Animath de printemps · problèmes originaux dans l'esprit des olympiades ·
+    <a href="#reglages">Réglages</a>
+  </footer>
+
+  <script src="data/arith.js"></script>
+  <script src="data/algebre.js"></script>
+  <script src="data/geo.js"></script>
+  <script src="data/combi.js"></script>
+  <script src="data/logique.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
