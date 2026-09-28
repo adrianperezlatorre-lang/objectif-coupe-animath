@@ -7,4 +7,4 @@ algèbre, géométrie, dénombrement, logique), du 28 septembre 2026 à avril 20
 - En ligne : https://adrianperezlatorre-lang.github.io/objectif-coupe-animath/
 - Hors ligne : ouvrir `objectif-animath.html` (fichier autonome, régénéré par `python3 build.py`).
 
-La progression est enregistrée dans le navigateur (localStorage) ; export/import dans « Réglages ».
+Comptes (pseudo + mot de passe) : la progression est synchronisée entre appareils via Supabase (tables `am_progression`, RPC `am_charger`/`am_sauvegarder`, comptes partagés avec le site Brevet Molière). Sans compte, elle reste dans le navigateur.

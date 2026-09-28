@@ -45,11 +45,112 @@
   const indexAujourdhui = () => Math.max(0, Math.min(TOTAL - 1, diffJours(START, aujourdhui())));
 
   /* ---------- État ---------- */
-  let E;
-  try { E = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { E = {}; }
-  E.reglages = Object.assign({ exam: EXAM_DEFAUT, libre: false }, E.reglages || {});
-  E.p = E.p || {};
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(E)); } catch (e) {} };
+  /* ---------- Comptes (cloud Supabase, mêmes comptes que le site Brevet Molière) ----------
+     Pseudo + mot de passe (bcrypt côté serveur). Sans compte : mode invité, local seulement. */
+  const SYNC = { url: "https://dygwcehqjzbduphiiybf.supabase.co", key: "sb_publishable_Z8UAoZ94YvS-vLcsu7rfUA_GVYgV81r" };
+  const ls = {
+    get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} },
+    del: (k) => { try { localStorage.removeItem(k); } catch (e) {} },
+  };
+  const pseudo = () => ls.get("am_pseudo");
+  const jeton = () => ls.get("am_token");
+  const cleEtat = () => (pseudo() ? KEY + "::" + pseudo() : KEY);
+  const ERREURS = {
+    PSEUDO_PRIS: "Ce pseudo est déjà pris.",
+    PSEUDO_INVALIDE: "Pseudo : 2 à 20 caractères (lettres, chiffres, . - _).",
+    MDP_INVALIDE: "Mot de passe : 4 caractères minimum.",
+    IDENTIFIANTS_INCORRECTS: "Pseudo ou mot de passe incorrect.",
+    SESSION_INVALIDE: "Session expirée : reconnecte-toi.",
+  };
+  async function rpc(fn, args) {
+    let res;
+    try {
+      res = await fetch(SYNC.url + "/rest/v1/rpc/" + fn, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SYNC.key, Authorization: "Bearer " + SYNC.key },
+        body: JSON.stringify(args),
+      });
+    } catch (e) { throw "Pas de connexion internet — réessaie."; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const code = Object.keys(ERREURS).find((c) => (data.message || "").includes(c));
+      throw code ? ERREURS[code] : "Erreur serveur — réessaie dans un instant.";
+    }
+    return data;
+  }
+
+  function lireEtat(k) {
+    let x;
+    try { x = JSON.parse(ls.get(k)) || {}; } catch (e) { x = {}; }
+    x.reglages = Object.assign({ exam: EXAM_DEFAUT, libre: false }, x.reglages || {});
+    x.p = x.p || {};
+    return x;
+  }
+  // Fusion de deux progressions (appareil + cloud) : pour chaque problème on garde la version la plus avancée.
+  function poids(x) {
+    return (x.fini ? 1000 : 0) + (x.juste ? 100 : 0) + (x.bareme || []).filter(Boolean).length * 10 + (x.pistes || 0) + (x.brouillon ? 1 : 0);
+  }
+  function fusion(a, b) {
+    const r = { reglages: Object.assign({}, b.reglages || {}, a.reglages || {}), p: {} };
+    new Set([...Object.keys(a.p || {}), ...Object.keys(b.p || {})]).forEach((id) => {
+      const x = (a.p || {})[id], y = (b.p || {})[id];
+      r.p[id] = !x ? y : !y ? x : poids(x) >= poids(y) ? x : y;
+    });
+    return r;
+  }
+
+  let E = lireEtat(cleEtat());
+  let syncTimer = null;
+  const save = () => {
+    ls.set(cleEtat(), JSON.stringify(E));
+    if (!jeton()) return;
+    ls.set("am_dirty", "1");
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(pousser, 1200);
+  };
+  async function pousser() {
+    if (!jeton()) return;
+    try {
+      await rpc("am_sauvegarder", { p_token: jeton(), p_etat: E });
+      ls.del("am_dirty");
+    } catch (e) {
+      if (e === ERREURS.SESSION_INVALIDE) { ls.del("am_token"); ls.del("am_pseudo"); }
+    }
+    majPillCompte();
+  }
+  // Récupère la progression faite sur un autre appareil, fusionne, puis renvoie le résultat.
+  async function tirer() {
+    if (!jeton()) return;
+    try {
+      const r = await rpc("am_charger", { p_token: jeton() });
+      const avant = JSON.stringify(E);
+      E = fusion(E, r.etat || {});
+      E.reglages = Object.assign({ exam: EXAM_DEFAUT, libre: false }, E.reglages);
+      ls.set(cleEtat(), JSON.stringify(E));
+      if (JSON.stringify(r.etat || {}) !== JSON.stringify(E)) save();
+      if (avant !== JSON.stringify(E) && !document.activeElement.matches("input,textarea")) vueRefresh();
+    } catch (e) {
+      if (e === ERREURS.SESSION_INVALIDE) { ls.del("am_token"); ls.del("am_pseudo"); E = lireEtat(KEY); vueRefresh(); }
+    }
+  }
+  async function entrer(r, nouveau) {
+    ls.set("am_pseudo", r.pseudo);
+    ls.set("am_token", r.token);
+    // la progression « invité » de cet appareil est rattachée au compte
+    const local = fusion(lireEtat(KEY + "::" + r.pseudo), lireEtat(KEY));
+    ls.del(KEY);
+    E = local;
+    ls.set(cleEtat(), JSON.stringify(E));
+    await tirer();
+    save();
+  }
+  function sortir() {
+    const t = jeton();
+    if (t) rpc("bm_deconnecter", { p_token: t }).catch(() => {});
+    ls.del("am_token"); ls.del("am_pseudo"); ls.del("am_dirty");
+    E = lireEtat(KEY);
+  }
   const etat = (id) => (E.p[id] = E.p[id] || { pistes: 0, essais: 0 });
 
   // statut : null | "parfait" | "reussi" | "vu"
@@ -123,7 +224,9 @@
     $("#statsMini").innerHTML =
       `<span class="pill" title="Jours consécutifs">🔥 ${serie()}</span>` +
       `<span class="pill" title="Étoiles gagnées">⭐ ${tot}</span>` +
-      `<span class="pill hide-sm" title="Avant la Coupe">⏳ J−${Math.max(0, jExam)}</span>`;
+      `<span class="pill hide-sm" title="Avant la Coupe">⏳ J−${Math.max(0, jExam)}</span>` +
+      `<a class="pill compte" id="pillCompte" href="#compte"></a>`;
+    majPillCompte();
   }
 
   /* ---------- Vue : problème du jour ---------- */
@@ -485,6 +588,66 @@
     </div>`;
   }
 
+  function majPillCompte() {
+    const el = $("#pillCompte");
+    if (!el) return;
+    el.innerHTML = pseudo() ? `👤 ${esc(pseudo())}${ls.get("am_dirty") ? " ⟳" : ""}` : "👤 Se connecter";
+    el.title = pseudo() ? (ls.get("am_dirty") ? "Synchronisation en attente" : "Progression sauvegardée en ligne") : "Créer un compte ou se connecter";
+  }
+
+  /* ---------- Vue : compte ---------- */
+  function vueCompte(msg) {
+    if (pseudo()) {
+      const n = PLANNING.filter((p) => statut(p)).length;
+      app.innerHTML = `<div class="card settings">
+        <h2 style="margin-top:0;font-family:var(--serif)">👤 ${esc(pseudo())}</h2>
+        <p>Tu es connecté·e. Ta progression (<b>${n}</b> problème${n > 1 ? "s" : ""} travaillé${n > 1 ? "s" : ""}) est enregistrée en ligne :
+        connecte-toi avec le même pseudo sur n'importe quel ordinateur, tablette ou téléphone pour la retrouver.</p>
+        <p id="etatSync" style="color:var(--ink-2)">${ls.get("am_dirty") ? "⟳ Synchronisation en attente (hors ligne ?)" : "✅ Tout est synchronisé."}</p>
+        <div class="btn-row">
+          <button class="btn soft" id="syncNow">Synchroniser maintenant</button>
+          <button class="btn ghost" id="logout">Se déconnecter</button>
+        </div>
+      </div>`;
+      $("#syncNow").onclick = async () => {
+        $("#etatSync").textContent = "Synchronisation…";
+        await tirer(); await pousser();
+        $("#etatSync").textContent = ls.get("am_dirty") ? "⟳ Impossible de joindre le serveur, réessaie plus tard." : "✅ Tout est synchronisé.";
+      };
+      $("#logout").onclick = () => { sortir(); location.hash = "#aujourdhui"; route(); };
+      return;
+    }
+    app.innerHTML = `<div class="card settings">
+      <h2 style="margin-top:0;font-family:var(--serif)">Mon compte</h2>
+      <p style="color:var(--ink-2)">Crée un compte pour retrouver ta progression sur tous tes appareils. Sans compte, elle reste seulement dans ce navigateur.
+      Si tu as déjà un compte sur le site <b>Brevet Molière</b>, il fonctionne aussi ici.</p>
+      <label for="ps">Pseudo</label>
+      <input id="ps" autocomplete="username" autocapitalize="off" spellcheck="false" style="font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);width:100%;max-width:320px" />
+      <label for="mdp">Mot de passe</label>
+      <input id="mdp" type="password" autocomplete="current-password" style="font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);width:100%;max-width:320px" />
+      <div id="msgCompte">${msg ? `<div class="feedback ko">${esc(msg)}</div>` : ""}</div>
+      <div class="btn-row">
+        <button class="btn" id="login">Se connecter</button>
+        <button class="btn soft" id="signup">Créer un compte</button>
+      </div>
+      <p style="color:var(--ink-3);font-size:13.5px;margin-bottom:0">Choisis un pseudo (pas ton nom complet) et un mot de passe que tu n'utilises nulle part ailleurs. Ta progression actuelle sur cet appareil sera rattachée au compte.</p>
+    </div>`;
+    const go = async (fn) => {
+      const ps = $("#ps").value.trim(), mdp = $("#mdp").value;
+      $("#msgCompte").innerHTML = `<div class="feedback info">Un instant…</div>`;
+      try {
+        const r = await rpc(fn, { p_pseudo: ps, p_mdp: mdp });
+        await entrer(r, fn === "bm_inscrire");
+        location.hash = "#aujourdhui"; route();
+      } catch (e) {
+        $("#msgCompte").innerHTML = `<div class="feedback ko">${esc(e)}</div>`;
+      }
+    };
+    $("#login").onclick = () => go("bm_connecter");
+    $("#signup").onclick = () => go("bm_inscrire");
+    $("#mdp").addEventListener("keydown", (e) => e.key === "Enter" && go("bm_connecter"));
+  }
+
   /* ---------- Vue : réglages ---------- */
   function vueReglages() {
     app.innerHTML = `<div class="card settings">
@@ -507,10 +670,10 @@
     };
     $("#import").onclick = () => {
       const inp = document.createElement("input"); inp.type = "file"; inp.accept = "application/json";
-      inp.onchange = () => inp.files[0].text().then((t) => { try { E = JSON.parse(t); save(); location.reload(); } catch (e) { alert("Fichier invalide"); } });
+      inp.onchange = () => inp.files[0].text().then((t) => { try { E = fusion(JSON.parse(t), { p: {} }); save(); pousser().then(() => location.reload()); } catch (e) { alert("Fichier invalide"); } });
       inp.click();
     };
-    $("#reset").onclick = () => { if (confirm("Effacer toute la progression ?")) { localStorage.removeItem(KEY); location.reload(); } };
+    $("#reset").onclick = () => { if (confirm("Effacer toute la progression ?")) { E = lireEtat("__vide__"); save(); pousser().then(() => location.reload()); } };
   }
 
   /* ---------- Routeur ---------- */
@@ -529,8 +692,14 @@
     else if (nom === "progres") vueProgres();
     else if (nom === "methode") vueMethode();
     else if (nom === "reglages") vueReglages();
+    else if (nom === "compte") vueCompte();
     else vueJour(indexAccueil(), true);
   }
   window.addEventListener("hashchange", () => { route(); window.scrollTo(0, 0); });
   route();
+
+  // au démarrage et au retour sur l'onglet : récupérer la progression faite ailleurs
+  if (jeton()) { tirer(); if (ls.get("am_dirty")) pousser(); }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && jeton()) tirer(); });
+  window.addEventListener("online", () => { if (ls.get("am_dirty")) pousser(); });
 })();
